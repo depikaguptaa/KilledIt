@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String      @id @default(uuid())
+  handle    String      @unique
+  email     String      @unique
+  avatarUrl String?
+  role      Role        @default(USER)
+  karma     Int         @default(0)
+  obits     Obituary[]
+  comments  Comment[]
+  reactions Reaction[]
+  reports   Report[]
+  createdAt DateTime    @default(now())
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model Obituary {
+  id          String      @id @default(uuid())
+  title       String
+  blurb       String      @db.VarChar(120)
+  causes      String[]
+  storyMd     String
+  mediaUrls   String[]
+  upvotes     Int         @default(0)
+  roastScore  Int         @default(0)
+  founder     User        @relation(fields: [founderId], references: [id])
+  founderId   String
+  comments    Comment[]
+  reactions   Reaction[]
+  reports     Report[]
+  createdAt   DateTime    @default(now())
+
+  @@index([upvotes, createdAt])
+}
+
+model Comment {
+  id          String      @id @default(uuid())
+  content     String
+  emoji       String?
+  author      User        @relation(fields: [authorId], references: [id])
+  authorId    String
+  obituary    Obituary    @relation(fields: [obituaryId], references: [id])
+  obituaryId  String
+  createdAt   DateTime    @default(now())
+}
+
+model Reaction {
+  id          String   @id @default(uuid())
+  type        String   // "upvote" or emoji
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  obituary    Obituary @relation(fields: [obituaryId], references: [id])
+  obituaryId  String
+  createdAt   DateTime @default(now())
+
+  @@unique([type, userId, obituaryId])
+}
+
+model Report {
+  id          String   @id @default(uuid())
+  reason      String
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  obituary    Obituary @relation(fields: [obituaryId], references: [id])
+  obituaryId  String
+  createdAt   DateTime @default(now())
+} 
