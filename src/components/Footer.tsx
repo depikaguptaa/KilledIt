@@ -1,6 +1,39 @@
+'use client'
+
 import Link from 'next/link';
+import { usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { User } from '@supabase/supabase-js'
 
 export default function Footer() {
+  const pathname = usePathname()
+  const [user, setUser] = useState<User | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+      setIsLoading(false)
+    }
+    getUser()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setUser(session?.user ?? null)
+        setIsLoading(false)
+      }
+    )
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // Only show footer on homepage when user is not logged in
+  if (isLoading || user || pathname !== '/') {
+    return null
+  }
+
   return (
     <footer className="border-t border-neutral-800 bg-neutral-900/50 backdrop-blur-sm">
       <div className="mx-auto max-w-7xl px-4 py-8">

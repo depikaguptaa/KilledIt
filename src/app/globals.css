@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@plugin "@tailwindcss/typography";
 @custom-variant dark (&:is(.dark *));
 @theme inline {
     --radius-sm: calc(var(--radius) - 4px);
@@ -115,4 +116,51 @@
     body {
         @apply bg-background text-foreground;
     }
+}
+
+
+/* Custom animations for graveyard elements */
+
+@keyframes gentle-sway {
+    0%,
+    100% {
+        transform: rotate(12deg) translateY(0px);
+    }
+    50% {
+        transform: rotate(14deg) translateY(-2px);
+    }
+}
+
+@keyframes gentle-sway-reverse {
+    0%,
+    100% {
+        transform: rotate(-6deg) translateY(0px);
+    }
+    50% {
+        transform: rotate(-8deg) translateY(-1px);
+    }
+}
+
+@keyframes gentle-sway-small {
+    0%,
+    100% {
+        transform: rotate(3deg) translateY(0px);
+    }
+    50% {
+        transform: rotate(5deg) translateY(-1px);
+    }
+}
+
+.tombstone-sway-1 {
+    animation: gentle-sway 8s ease-in-out infinite;
+}
+
+.tombstone-sway-2 {
+    animation: gentle-sway-reverse 10s ease-in-out infinite;
+    animation-delay: -2s;
+}
+
+.tombstone-sway-3 {
+    animation: gentle-sway-small 12s ease-in-out infinite;
+    animation-delay: -4s;
 }
