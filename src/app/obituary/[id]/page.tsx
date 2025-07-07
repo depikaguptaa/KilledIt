@@ -11,10 +11,10 @@ import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { supabase } from '@/lib/supabase'
 import { InteractionButtons } from '@/components/InteractionButtons'
-import { ShareButton } from '@/components/ShareButton'
 import { TimeDisplay } from '@/components/TimeDisplay'
 import { CommentSection } from '@/components/CommentSection'
 import Link from 'next/link'
+import { ObitActionMenu } from '@/components/ObitActionMenu'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -41,6 +41,7 @@ interface ObituaryWithFounder {
 export default function ObituaryPage({ params }: PageProps) {
   const router = useRouter()
   const [obituary, setObituary] = useState<ObituaryWithFounder | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export default function ObituaryPage({ params }: PageProps) {
 
       // Check authentication
       const { data: { user } } = await supabase.auth.getUser()
+      setCurrentUserId(user?.id || null)
       
       if (!user) {
         // Redirect to login if not authenticated
@@ -120,12 +122,10 @@ export default function ObituaryPage({ params }: PageProps) {
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       <Card className="border-neutral-800 bg-neutral-900 relative">
-        {/* Share Button */}
-        <ShareButton
-          title={`RIP ${obituary.title} - KilledIt`}
-          text={obituary.blurb}
-          className="absolute top-4 right-4 h-10 px-3 hover:bg-neutral-800 z-10"
-        />
+        {/* Action menu top-right */}
+        <div className="absolute top-4 right-4 z-10">
+          <ObitActionMenu obituary={obituary} isOwner={currentUserId===obituary.founder.id} />
+        </div>
         
         <CardHeader className="pr-20">
           <div className="flex items-center gap-3 mb-4">
@@ -203,7 +203,6 @@ export default function ObituaryPage({ params }: PageProps) {
             <InteractionButtons
               obituaryId={obituary.id}
               showComments={false}
-              showShare={false}
             />
           </div>
           

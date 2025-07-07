@@ -11,12 +11,14 @@ import { useRouter } from 'next/navigation'
 import { TimeDisplay } from './TimeDisplay'
 import { GiphyPicker } from './GiphyPicker'
 import Link from 'next/link'
+import { CommentActionMenu } from './CommentActionMenu'
 
 interface Comment {
   id: string
   content: string
   authorId: string
   createdAt: string
+  parentId?: string | null
   mediaUrls?: string[]
   author: {
     id: string
@@ -41,6 +43,10 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
   const [isUploadingMedia, setIsUploadingMedia] = useState(false)
   const [showGiphyPicker, setShowGiphyPicker] = useState(false)
   const [selectedGifs, setSelectedGifs] = useState<string[]>([])
+  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({})
+  const [userLikedIds, setUserLikedIds] = useState<string[]>([])
+  const [replyParentId, setReplyParentId] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     const loadUserAndComments = async () => {
@@ -50,6 +56,12 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
       try {
         const commentsData = await obituaryService.getComments(obituaryId)
         setComments(commentsData as unknown as Comment[])
+        
+        // Load like counts
+        const ids = (commentsData as unknown as Comment[]).map(c => c.id)
+        const { counts, userLikes } = await obituaryService.getCommentLikeCounts(ids)
+        setLikeCounts(counts)
+        setUserLikedIds(userLikes)
       } catch (error) {
         console.error('Failed to load comments:', error)
       } finally {
@@ -99,6 +111,30 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
     setSelectedGifs(prev => prev.filter((_, i) => i !== index))
   }
 
+  const handleToggleLike = async (commentId: string) => {
+    if (!user) {
+      router.push('/login')
+      return
+    }
+
+    try {
+      const isNowLiked = await obituaryService.toggleCommentLike(obituaryId, commentId)
+      setLikeCounts(prev => ({
+        ...prev,
+        [commentId]: Math.max(0, (prev[commentId] || 0) + (isNowLiked ? 1 : -1))
+      }))
+      setUserLikedIds(prev => isNowLiked ? [...prev, commentId] : prev.filter(id => id !== commentId))
+    } catch (error) {
+      console.error('Failed to toggle like:', error)
+    }
+  }
+
+  const handleReply = (comment: Comment) => {
+    setReplyParentId(comment.id)
+    setNewComment(`@${comment.author.handle} `)
+    textareaRef.current?.focus()
+  }
+
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault()
     
@@ -136,11 +172,13 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
       const comment = await obituaryService.createComment(
         obituaryId, 
         newComment.trim() || '', 
-        mediaUrls
+        mediaUrls,
+        replyParentId
       )
       
       setComments(prev => [...prev, comment as unknown as Comment])
       setNewComment('')
+      setReplyParentId(null)
       setSelectedMedia([])
       setMediaPreview([])
       setSelectedGifs([])
@@ -188,6 +226,7 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
               disabled={!user || isSubmitting}
               className="bg-neutral-800 border-neutral-700 text-neutral-100 placeholder:text-neutral-500 resize-none"
               rows={3}
+              ref={textareaRef}
             />
             
             {/* Media and Submit Controls */}
@@ -310,44 +349,137 @@ export function CommentSection({ obituaryId }: CommentSectionProps) {
         </div>
       ) : (
         <div className="space-y-4">
-          {comments.map((comment) => (
-            <div key={comment.id} className="flex gap-3">
-              <Avatar className="h-8 w-8 flex-shrink-0">
-                <AvatarFallback className="bg-neutral-800 text-neutral-300">
-                  💀
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <Link 
-                    href={`/profile/${comment.author.id}`}
-                    className="text-sm font-medium text-neutral-300 hover:text-neutral-100"
-                  >
-                    @{comment.author.handle}
-                  </Link>
-                  <TimeDisplay 
-                    timestamp={comment.createdAt}
-                    className="text-xs text-neutral-500"
-                  />
-                </div>
-                <p className="text-neutral-400 text-sm leading-relaxed">
-                  {comment.content}
-                </p>
-                
-                {comment.mediaUrls && comment.mediaUrls.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {comment.mediaUrls.map((url, mediaIndex) => (
-                      <img
-                        key={mediaIndex}
-                        src={url}
-                        alt={`Comment media ${mediaIndex + 1}`}
-                        className="max-w-32 max-h-32 object-cover rounded border border-neutral-600 cursor-pointer"
-                        onClick={() => window.open(url, '_blank')}
-                      />
-                    ))}
+          {comments.filter(c => !c.parentId).map((comment) => (
+            <div key={comment.id} className="space-y-4">
+              {/* Root Comment */}
+              <div className="flex gap-3">
+                <Avatar className="h-8 w-8 flex-shrink-0">
+                  <AvatarFallback className="bg-neutral-800 text-neutral-300">
+                    💀
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Link 
+                      href={`/profile/${comment.author.id}`}
+                      className="text-sm font-medium text-neutral-300 hover:text-neutral-100"
+                    >
+                      @{comment.author.handle}
+                    </Link>
+                    <TimeDisplay 
+                      timestamp={comment.createdAt}
+                      className="text-xs text-neutral-500"
+                    />
                   </div>
-                )}
+                  <p className="text-neutral-400 text-sm leading-relaxed">
+                    {comment.content}
+                  </p>
+                  
+                  {comment.mediaUrls && comment.mediaUrls.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {comment.mediaUrls.map((url, mediaIndex) => (
+                        <img
+                          key={mediaIndex}
+                          src={url}
+                          alt={`Comment media ${mediaIndex + 1}`}
+                          className="max-w-32 max-h-32 object-cover rounded border border-neutral-600 cursor-pointer"
+                          onClick={() => window.open(url, '_blank')}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Actions: like & reply */}
+                  <div className="flex items-center gap-4 mt-2 text-sm text-neutral-500">
+                    <button
+                      className={`flex items-center gap-1 hover:text-red-400 transition-colors ${userLikedIds.includes(comment.id) ? 'text-red-400' : ''}`}
+                      onClick={(e) => {e.preventDefault(); handleToggleLike(comment.id)}}
+                    >
+                      ❤️ {likeCounts[comment.id] || 0}
+                    </button>
+                    <button
+                      className="hover:text-neutral-300 transition-colors"
+                      onClick={(e) => {e.preventDefault(); handleReply(comment)}}
+                    >
+                      Reply
+                    </button>
+                    <div className="ml-auto">
+                      <CommentActionMenu
+                        commentId={comment.id}
+                        obituaryId={obituaryId}
+                        canDelete={user?.id === comment.authorId}
+                        onDeleted={() => setComments(prev => prev.filter(c => c.id !== comment.id))}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
+
+              {/* Replies */}
+              {comments.filter(r => r.parentId === comment.id).map(reply => (
+                <div key={reply.id} className="flex gap-3 ml-8 mt-4">
+                  <Avatar className="h-8 w-8 flex-shrink-0">
+                    <AvatarFallback className="bg-neutral-800 text-neutral-300">
+                      💀
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Link 
+                        href={`/profile/${reply.author.id}`}
+                        className="text-sm font-medium text-neutral-300 hover:text-neutral-100"
+                      >
+                        @{reply.author.handle}
+                      </Link>
+                      <TimeDisplay 
+                        timestamp={reply.createdAt}
+                        className="text-xs text-neutral-500"
+                      />
+                    </div>
+                    <p className="text-neutral-400 text-sm leading-relaxed">
+                      {reply.content}
+                    </p>
+
+                    {reply.mediaUrls && reply.mediaUrls.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {reply.mediaUrls.map((url, mediaIndex) => (
+                          <img
+                            key={mediaIndex}
+                            src={url}
+                            alt={`Comment media ${mediaIndex + 1}`}
+                            className="max-w-32 max-h-32 object-cover rounded border border-neutral-600 cursor-pointer"
+                            onClick={() => window.open(url, '_blank')}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Reply actions */}
+                    <div className="flex items-center gap-4 mt-2 text-sm text-neutral-500">
+                      <button
+                        className={`flex items-center gap-1 hover:text-red-400 transition-colors ${userLikedIds.includes(reply.id) ? 'text-red-400' : ''}`}
+                        onClick={(e) => {e.preventDefault(); handleToggleLike(reply.id)}}
+                      >
+                        ❤️ {likeCounts[reply.id] || 0}
+                      </button>
+                      <button
+                        className="hover:text-neutral-300 transition-colors"
+                        onClick={(e) => {e.preventDefault(); handleReply(reply)}}
+                      >
+                        Reply
+                      </button>
+                      <div className="ml-auto">
+                        <CommentActionMenu
+                          commentId={reply.id}
+                          obituaryId={obituaryId}
+                          canDelete={user?.id === reply.authorId}
+                          onDeleted={() => setComments(prev => prev.filter(c => c.id !== reply.id))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
         </div>

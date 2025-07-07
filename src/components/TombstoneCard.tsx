@@ -6,11 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
 import { Obituary, supabase } from '@/lib/supabase'
 import { InteractionButtons } from './InteractionButtons'
 import { TimeDisplay } from './TimeDisplay'
 import { User } from '@supabase/supabase-js'
+import { ObitActionMenu } from './ObitActionMenu'
 
 interface TombstoneCardProps {
   obituary: Obituary
@@ -34,34 +34,6 @@ export function TombstoneCard({ obituary, commentCount = 0 }: TombstoneCardProps
     return () => subscription.unsubscribe()
   }, [])
 
-  const handleShare = async (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    
-    const url = `${window.location.origin}/obituary/${obituary.id}`
-    
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `RIP ${obituary.title} - KilledIt`,
-          text: obituary.blurb,
-          url: url
-        })
-      } catch {
-        // User cancelled share
-      }
-    } else {
-      // Fallback to clipboard
-      try {
-        await navigator.clipboard.writeText(url)
-        alert('Link copied to clipboard!')
-      } catch (error) {
-        console.error('Failed to copy link:', error)
-        alert('Failed to copy link. Please copy manually: ' + url)
-      }
-    }
-  }
-  
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't navigate if clicking on interactive elements
     const target = e.target as HTMLElement
@@ -85,16 +57,10 @@ export function TombstoneCard({ obituary, commentCount = 0 }: TombstoneCardProps
       className="border-neutral-800 bg-gradient-to-br from-neutral-900 to-neutral-950 hover:border-neutral-700 transition-all duration-300 cursor-pointer relative group shadow-lg shadow-black/20 hover:shadow-xl hover:shadow-black/30 hover:scale-[1.02] hover:bg-gradient-to-br hover:from-neutral-850 hover:to-neutral-900"
       onClick={handleCardClick}
     >
-      {/* Share Button */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="absolute top-2 right-2 h-8 w-8 p-0 opacity-0 group-hover:opacity-100 hover:bg-neutral-800/80 z-10 transition-all duration-200 backdrop-blur-sm"
-        onClick={handleShare}
-        title="Share this obituary"
-      >
-        🔗
-      </Button>
+      {/* Action menu */}
+      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+        <ObitActionMenu obituary={obituary} isOwner={user?.id===obituary.founder.id} />
+      </div>
       
       <CardHeader>
         <div className="flex items-center gap-3 mb-2">
@@ -173,7 +139,6 @@ export function TombstoneCard({ obituary, commentCount = 0 }: TombstoneCardProps
           obituaryId={obituary.id}
           commentCount={commentCount}
           showComments={true}
-          showShare={false}
         />
       </CardContent>
     </Card>

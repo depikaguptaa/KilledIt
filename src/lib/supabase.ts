@@ -22,11 +22,91 @@ const NOUNS = [
   'Hustler', 'Pioneer', 'Innovator', 'Disruptor', 'Maker', 'Idealist', 'Optimist'
 ]
 
-function generateAnonymousHandle(): string {
+export function generateAnonymousHandle(): string {
   const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
   const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
   const number = Math.floor(Math.random() * 999) + 1
   return `${adjective}${noun}${number}`
+}
+
+// Ensure a public.User row exists for the authenticated user.
+export async function ensureUserRecord(userId?: string, email?: string): Promise<boolean> {
+  const { data: { session } } = await supabase.auth.getSession()
+  const authUser = session?.user
+  const id = userId || authUser?.id
+  if (!id) return false
+
+  console.log('Ensuring user record for:', { id, email: email || authUser?.email })
+
+  // Check if a user record already exists
+  const { data: existingUser, error: selectError } = await supabase
+    .from('User')
+    .select('id, handle')
+    .eq('id', id)
+    .single()
+
+  if (selectError && selectError.code !== 'PGRST116') {
+    console.error('Error checking for user:', selectError)
+    return false
+  }
+
+  // If user exists and has a handle, we're done.
+  if (existingUser?.handle) {
+    console.log('User record already exists and is valid:', existingUser)
+    return false
+  }
+  
+  // If user was previously "deleted", clear the flag now.
+  if (authUser?.user_metadata?.deleted) {
+    console.log('User was previously deleted, resetting...')
+    const { error: updateError } = await supabase.auth.updateUser({
+      data: { deleted: null }
+    })
+    if (updateError) {
+      console.error('Failed to clear deleted flag:', updateError)
+      // Not returning false, as we can still try to upsert the user record.
+    }
+  }
+
+  console.log('User record is missing or incomplete. Creating/updating now.')
+
+  // Upsert the user record.
+  // If the user doesn't exist, it creates one with a new handle.
+  // If the user exists but has no handle, it generates one.
+  const { data, error } = await supabase
+    .from('User')
+    .upsert({
+      id,
+      email: email || authUser?.email || '',
+      // Only set handle if it's null, using the DB function
+      handle: existingUser?.handle || generateAnonymousHandle(),
+      avatarUrl: null,
+      karma: 0
+    })
+    .select()
+    .single()
+
+  if (error) {
+    console.error('Failed to upsert user record:', error)
+    // Attempt to generate a handle on the client as a fallback
+    if (error.message.includes('null value in column "handle"')) {
+       const { data: retryData, error: retryError } = await supabase
+         .from('User')
+         .upsert({ id, email: email || authUser?.email || '', handle: generateAnonymousHandle() })
+         .select().single()
+
+       if (retryError) {
+         console.error('Fallback user upsert failed:', retryError)
+         return false
+       }
+       console.log('Successfully created user with fallback handle:', retryData)
+       return true
+    }
+    return false
+  }
+
+  console.log('Successfully upserted user record:', data)
+  return true
 }
 
 // Database types
@@ -316,7 +396,7 @@ export const obituaryService = {
     return !!savedReaction
   },
 
-  async createComment(obituaryId: string, content: string, mediaUrls?: string[]) {
+  async createComment(obituaryId: string, content: string, mediaUrls?: string[], parentId?: string | null) {
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
     if (!user) throw new Error('Not authenticated')
@@ -355,6 +435,7 @@ export const obituaryService = {
         content: content.trim(),
         authorId: user.id,
         obituaryId: obituaryId,
+        parentId: parentId || null,
         mediaUrls: mediaUrls || null
       })
       .select(`
@@ -362,6 +443,7 @@ export const obituaryService = {
         content,
         authorId,
         createdAt,
+        parentId,
         mediaUrls,
         author:User (
           id,
@@ -386,6 +468,7 @@ export const obituaryService = {
         content,
         authorId,
         createdAt,
+        parentId,
         mediaUrls,
         author:User (
           id,
@@ -512,6 +595,141 @@ export const obituaryService = {
       throw new Error(`Failed to load saved obituaries: ${error.message}`)
     }
 
-    return savedReactions?.map(r => r.obituary).filter(Boolean) || []
-  }
+    const list = (savedReactions?.map(r => r.obituary).filter(Boolean) || []) as unknown as Obituary[]
+    // Deduplicate by obituary id in case multiple "save" reactions exist
+    const deduped = Array.from(new Map(list.map(o => [o.id, o])).values())
+    return deduped
+  },
+
+  async deleteComment(commentId: string) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) throw new Error('Not authenticated')
+
+    const { error } = await supabase
+      .from('Comment')
+      .delete()
+      .eq('id', commentId)
+      .eq('authorId', user.id) // Ensure user can only delete their own comment
+
+    if (error) {
+      console.error('Failed to delete comment:', error)
+      throw new Error(`Failed to delete comment: ${error.message}`)
+    }
+  },
+
+  async deleteObituary(obituaryId: string) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) throw new Error('Not authenticated')
+    
+    // First, verify the user is the founder of the obituary
+    const { data: obit, error: fetchError } = await supabase
+      .from('Obituary')
+      .select('founderId')
+      .eq('id', obituaryId)
+      .single()
+
+    if (fetchError || obit?.founderId !== user.id) {
+      throw new Error('Unauthorized or obituary not found')
+    }
+
+    // Delete all associated data
+    // Note: In a production app, this should be a single transaction
+    // or a database function (edge function) for atomicity.
+    const { error: reactionError } = await supabase.from('Reaction').delete().eq('obituaryId', obituaryId)
+    if (reactionError) throw new Error(`Failed to delete reactions: ${reactionError.message}`)
+
+    const { error: commentError } = await supabase.from('Comment').delete().eq('obituaryId', obituaryId)
+    if (commentError) throw new Error(`Failed to delete comments: ${commentError.message}`)
+
+    // Finally, delete the obituary itself
+    const { error: obitError } = await supabase.from('Obituary').delete().eq('id', obituaryId)
+    if (obitError) throw new Error(`Failed to delete obituary: ${obitError.message}`)
+  },
+
+  /* ---------------- Comment Likes (❤️) ---------------- */
+
+  async toggleCommentLike(obituaryId: string, commentId: string) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) throw new Error('Not authenticated')
+
+    // Check if user already liked this comment
+    const { data: existingReaction, error: checkError } = await supabase
+      .from('Reaction')
+      .select('id')
+      .eq('type', '❤️')
+      .eq('userId', user.id)
+      .eq('commentId', commentId)
+      .single()
+
+    if (checkError && checkError.code !== 'PGRST116') {
+      console.error('Error checking existing comment like:', checkError)
+      throw new Error(`Failed to check existing comment like: ${checkError.message}`)
+    }
+
+    if (existingReaction) {
+      // Remove like
+      const { error: deleteError } = await supabase
+        .from('Reaction')
+        .delete()
+        .eq('id', existingReaction.id)
+
+      if (deleteError) {
+        console.error('Error removing like:', deleteError)
+        throw new Error(`Failed to remove like: ${deleteError.message}`)
+      }
+      return false
+    } else {
+      // Add like
+      const { error: insertError } = await supabase
+        .from('Reaction')
+        .insert({
+          id: crypto.randomUUID(),
+          type: '❤️',
+          userId: user.id,
+          commentId,
+          obituaryId: null
+        })
+
+      if (insertError) {
+        console.error('Error adding like:', insertError)
+        throw new Error(`Failed to add like: ${insertError.message}`)
+      }
+      return true
+    }
+  },
+
+  async getCommentLikeCounts(commentIds: string[]) {
+    if (commentIds.length === 0) return { counts: {}, userLikes: [] }
+
+    const { data, error } = await supabase
+      .from('Reaction')
+      .select('commentId, userId')
+      .eq('type', '❤️')
+      .in('commentId', commentIds)
+
+    if (error) {
+      console.error('Failed to fetch comment like counts:', error)
+      return { counts: {}, userLikes: [] }
+    }
+
+    const counts: Record<string, number> = {}
+    const userLikes: string[] = []
+    const { data: { session } } = await supabase.auth.getSession()
+    const currentUserId = session?.user?.id
+
+    commentIds.forEach(id => counts[id] = 0)
+
+    data?.forEach((row) => {
+      if (!row.commentId) return
+      counts[row.commentId] = (counts[row.commentId] || 0) + 1
+      if (row.userId === currentUserId) {
+        userLikes.push(row.commentId)
+      }
+    })
+
+    return { counts, userLikes }
+  },
 } 

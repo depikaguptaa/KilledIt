@@ -270,7 +270,7 @@ export default function HomePage() {
           <div className="w-18 h-1 bg-neutral-600 mt-1"></div>
         </div>
       </div>
-      
+
       <div className="mx-auto max-w-4xl px-4 py-8 relative z-30">
         <div className="mb-12 text-center">
           <h1 className="mb-6 text-3xl sm:text-4xl lg:text-6xl font-bold text-neutral-100 leading-tight">

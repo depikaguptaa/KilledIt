@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -45,6 +47,7 @@ export default function SettingsPage() {
   const [selectedTimezone, setSelectedTimezone] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [burnScore, setBurnScore] = useState(0)
+  const [isNew, setIsNew] = useState(false)
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -101,6 +104,12 @@ export default function SettingsPage() {
     loadSettings()
   }, [router])
 
+  useEffect(() => {
+    // determine new signup flag from query string client-side
+    const sp = new URLSearchParams(window.location.search)
+    setIsNew(sp.get('new') === '1')
+  }, [])
+
   const handleUpdateSettings = async () => {
     if (!settings) return
 
@@ -144,24 +153,55 @@ export default function SettingsPage() {
     if (!settings) return
 
     const confirmed = confirm(
-      'Are you sure you want to delete your account? This will permanently delete all your obituaries and cannot be undone.'
+      'Are you sure you want to delete your account? This will permanently delete all your obituaries, comments, reactions and cannot be undone.'
     )
 
     if (!confirmed) return
 
     try {
-      // Delete user record (this will cascade delete obituaries due to foreign key)
-      const { error } = await supabase
-        .from('User')
-        .delete()
-        .eq('id', settings.id)
+      // Collect obituary ids authored by user
+      const { data: userObits } = await supabase
+        .from('Obituary')
+        .select('id')
+        .eq('founderId', settings.id)
 
-      if (error) {
-        alert(`Failed to delete account: ${error.message}`)
-      } else {
-        await supabase.auth.signOut()
-        router.push('/')
+      const obituaryIds = userObits?.map(o => o.id) || []
+
+      // Delete reactions on those obits (from anyone)
+      if (obituaryIds.length) {
+        await supabase.from('Reaction').delete().in('obituaryId', obituaryIds)
+        // Delete comments on those obits
+        await supabase.from('Comment').delete().in('obituaryId', obituaryIds)
       }
+
+      // Delete reactions made by user elsewhere
+      await supabase.from('Reaction').delete().eq('userId', settings.id)
+
+      // Delete comments authored by user elsewhere
+      await supabase.from('Comment').delete().eq('authorId', settings.id)
+
+      // Delete obituaries themselves
+      if (obituaryIds.length) {
+        await supabase.from('Obituary').delete().in('id', obituaryIds)
+      }
+
+      // Delete the user row from our database
+      const { error: userDeleteError } = await supabase.from('User').delete().eq('id', settings.id)
+      if (userDeleteError) {
+        alert(`Failed to delete account: ${userDeleteError.message}`)
+        return
+      }
+
+      // Delete the user from Supabase Auth
+      const { error: authDeleteError } = await supabase.auth.updateUser({
+        data: { deleted: true } // Mark as deleted in auth metadata
+      })
+      if (authDeleteError) {
+        console.error('Failed to mark auth user as deleted:', authDeleteError)
+      }
+
+      await supabase.auth.signOut()
+      router.push('/?goodbye=1')
     } catch (error) {
       console.error('Failed to delete account:', error)
       alert('Failed to delete account. Please try again.')
@@ -208,6 +248,16 @@ export default function SettingsPage() {
         <h1 className="text-3xl font-bold text-neutral-100 mt-2">Account Settings</h1>
         <p className="text-neutral-400">Manage your anonymous identity and preferences</p>
       </div>
+
+      {isNew && (
+        <Card className="border-orange-800 bg-orange-900/30 mb-6 animate-in fade-in zoom-in-50">
+          <CardContent className="py-6 text-center">
+            <h2 className="text-xl font-bold text-orange-300 mb-2">Welcome to KilledIt! 🎉</h2>
+            <p className="text-neutral-300 mb-1">Choose a unique anonymous handle and set your timezone.</p>
+            <p className="text-neutral-400 text-sm">You can change these later in Settings.</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Profile Settings */}
       <Card className="border-neutral-800 bg-neutral-900 mb-6">

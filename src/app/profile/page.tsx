@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { InteractionButtons } from '@/components/InteractionButtons'
-import { supabase, Obituary, obituaryService } from '@/lib/supabase'
+import { supabase, Obituary, obituaryService, ensureUserRecord } from '@/lib/supabase'
 
 interface UserProfile {
   id: string
@@ -20,22 +20,32 @@ interface UserProfile {
   obits: Obituary[]
 }
 
+const createdAtIsRecent = (ts: string) => Date.now() - new Date(ts).getTime() < 5 * 60 * 1000 // 5 minutes
+
 export default function ProfilePage() {
   const router = useRouter()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({})
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
+  const [commentLikeCount, setCommentLikeCount] = useState(0)
 
   useEffect(() => {
-    const loadProfile = async () => {
+    const checkUser = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         router.push('/login')
         return
       }
 
-      // Get user profile with their obituaries
+      // Ensure a user record exists, and if one was just created,
+      // redirect to the settings page to choose a handle.
+      const created = await ensureUserRecord(user.id, user.email || undefined)
+      if (created) {
+        router.push('/profile/settings?new=1')
+        return
+      }
+      
       const { data, error } = await supabase
         .from('User')
         .select(`
@@ -61,6 +71,11 @@ export default function ProfilePage() {
         console.error('Failed to load profile:', error)
       } else {
         const profileData = data as unknown as UserProfile
+        // If user exists but looks new (0 obits) -> send to onboarding once
+        if (profileData.obits.length === 0 && createdAtIsRecent(profileData.createdAt)) {
+          router.push('/profile/settings?new=1')
+          return
+        }
         setProfile(profileData)
         
         // Get comment counts and reaction counts for all obituaries
@@ -83,12 +98,33 @@ export default function ProfilePage() {
             reactionCountsMap[obituaryId] = reactions?.length || 0
           }
           setReactionCounts(reactionCountsMap)
+
+          /* ----- Count ❤️ likes on any comment under the user's obituaries ----- */
+          // Get all comment ids for these obituaries
+          const { data: commentRows } = await supabase
+            .from('Comment')
+            .select('id')
+            .in('obituaryId', obituaryIds)
+
+          const commentIds = (commentRows || []).map(c => c.id)
+
+          let totalLikes = 0
+          if (commentIds.length > 0) {
+            const { data: likeRows } = await supabase
+              .from('Reaction')
+              .select('id')
+              .eq('type', '❤️')
+              .in('commentId', commentIds)
+
+            totalLikes = likeRows?.length || 0
+          }
+          setCommentLikeCount(totalLikes)
         }
       }
       setIsLoading(false)
     }
 
-    loadProfile()
+    checkUser()
   }, [router])
 
   const handleSignOut = async () => {
@@ -116,7 +152,7 @@ export default function ProfilePage() {
       sum + (commentCounts[obit.id] || 0), 0
     )
     
-    return totalReactions + totalComments
+    return totalReactions + totalComments + commentLikeCount
   }
 
   if (isLoading) {
@@ -255,7 +291,6 @@ export default function ProfilePage() {
                     <InteractionButtons
                       obituaryId={obit.id}
                       showComments={true}
-                      showShare={true}
                       commentCount={commentCounts[obit.id] || 0}
                     />
                   </CardContent>
